@@ -1,9 +1,9 @@
 ﻿namespace RabbitMQ.Producer.Interfaces
 {
-    internal interface IRabbitMQService
+    public interface IRabbitMQService
     {
         void SetupConnection();
-        void DeclareExchange(string exchange, string exchangeType);
+        bool DeclareExchange(string exchange, string exchangeType);
         void Dispose();
         Task PublishAsync(string message, string exchange, string routingKey);
     }

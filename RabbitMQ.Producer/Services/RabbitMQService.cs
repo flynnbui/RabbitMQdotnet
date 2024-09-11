@@ -35,32 +35,34 @@ public class RabbitMQService : IRabbitMQService
         {
             _connection = _factory.CreateConnection();
             _channel = _connection.CreateModel();
+            Console.WriteLine("Initialize RabbitMQ connection successfully!");
         }
-        catch (RabbitMQClientException ex)
+        catch (Exception ex)
         {
-            throw;
+            _logger.LogError(ex, "Failed to initialize RabbitMQ connection.");
+            Environment.Exit(1);
         }
     }
 
-    public void DeclareExchange(string exchange, string exchangeType)
+    public bool DeclareExchange(string exchange, string exchangeType)
     {
         try
         {
             _channel.ExchangeDeclare(exchange: exchange, type: exchangeType, durable: true, autoDelete: false);
+            return true; 
         }
         catch (OperationInterruptedException ex)
         {
-            // Check if there is a exchange already existing
             var shutdownReason = ex.ShutdownReason;
-            _logger.LogError(ex, "Exchange declaration failed: {0}", shutdownReason?.ReplyText);
-            if (shutdownReason?.ReplyCode == 406 && shutdownReason.ReplyText.Contains("PRECONDITION_FAILED"))
+            if (shutdownReason?.ReplyCode == 406)
             {
-                _logger.LogWarning("Exchange '{0}' already exists with different attributes.", exchange);
+                _logger.LogError("Exchange declaration failed: {Reason}", shutdownReason?.ReplyText);
+                return false; 
             }
             else
             {
-                // Throw the exception if it's not a known issue
-                throw;
+                _logger.LogError("An unexpected error occurred: {Message}", ex.Message);
+                return false; 
             }
         }
     }
@@ -86,12 +88,6 @@ public class RabbitMQService : IRabbitMQService
         {
             _channel.Close();
             _channel.Dispose();
-        }
-
-        if (_connection != null)
-        {
-            _connection.Close();
-            _connection.Dispose();
         }
     }
 }

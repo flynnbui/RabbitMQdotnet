@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+﻿using CommandLine;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -9,76 +9,53 @@ class Program
 {
     static async Task Main(string[] args)
     {
+        var parserResult = Parser.Default.ParseArguments<Options>(args);
         var host = CreateHostBuilder(args).Build();
         var logger = host.Services.GetRequiredService<ILogger<Program>>();
-        var rabbitMQService = host.Services.GetRequiredService<IRabbitMQService>();
+        var rabbitService = host.Services.GetRequiredService<IRabbitMQService>();
+        var userInputHelper = host.Services.GetRequiredService<UserInputHelper>();
+        UserInputHelper.DisplayHelp();
 
-        // Display help if "/h" is passed as a command-line argument
-        if (args.Length == 1 && args[0] == "/h")
-        {
-            UserInputHelper.DisplayHelp();
-            return;
-        }
+        await parserResult
+            .WithParsedAsync(async opts =>
+            {
+                rabbitService.SetupConnection();
+                try
+                {
+                    rabbitService.DeclareExchange(opts.Exchange, opts.ExchangeType);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "Failed to declare exchange.");
+                    return;
+                }
 
-        // Setup RabbitMQ connection
-        try
-        {
-            rabbitMQService.SetupConnection();
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to initialize RabbitMQ connection.");
-            System.Environment.Exit(1);
-        }
+                if (string.IsNullOrEmpty(opts.Message))
+                {
+                    Console.WriteLine("Please enter the message to publish:");
+                    opts.Message = Console.ReadLine();
+                }
 
-        // Ask user for the required inputs: exchange, exchange type, and routing key
-        string exchange = UserInputHelper.GetExchangeInput(logger);
-        string exchangeType = UserInputHelper.GetExchangeTypeInput(logger);
-        string routingKey = UserInputHelper.GetRoutingKeyInput();
+                await rabbitService.PublishAsync(opts.Exchange, opts.ExchangeType, opts.Message);
+                rabbitService.Dispose();
+                await userInputHelper.ContinueWithUserInput();
+            })
+            .ConfigureAwait(false);
 
-        // Attempt to declare the exchange, or catch the error if it already exists
-        try
+        if (parserResult.Tag == ParserResultType.NotParsed)
         {
-            rabbitMQService.DeclareExchange(exchange, exchangeType);
-            Console.WriteLine($"Exchange '{exchange}' declared successfully.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Exchange declaration failed. Likely due to it already existing with different attributes.");
-            Console.WriteLine($"Warning: {ex.Message}");
-            Console.WriteLine("You can still publish messages to the existing exchange.");
-        }
-
-        Console.WriteLine("Please enter the message to publish:");
-        string message = Console.ReadLine();
-
-        try
-        {
-            await rabbitMQService.PublishAsync(exchange, exchangeType, message);
-            Console.WriteLine("Message published successfully.");
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Failed to publish the message.");
-            Console.WriteLine($"Error: {ex.Message}");
-        }
-        finally
-        {
-            // Clean up resources
-            rabbitMQService.Dispose();
+            // Continue with user input for required fields
+            await userInputHelper.ContinueWithUserInput();
         }
     }
 
     static IHostBuilder CreateHostBuilder(string[] args) =>
-        Host.CreateDefaultBuilder(args)
-        .ConfigureAppConfiguration((context, config) =>
-            {
-                config.AddJsonFile("appsettings.json", optional: true, reloadOnChange: true);
-                config.AddEnvironmentVariables();
-            })
-            .ConfigureServices((context, services) =>
-            {
-                services.AddLogging(configure => configure.AddConsole());
-                services.AddSingleton<IRabbitMQService, RabbitMQService>();
-            });
+    Host.CreateDefaultBuilder(args)
+        .ConfigureServices((context, services) =>
+        {
+            services.AddLogging(configure => configure.AddConsole());
+            services.AddSingleton<IRabbitMQService, RabbitMQService>();
+            services.AddScoped<UserInputHelper>();
+        });
+
 }
